@@ -21,6 +21,9 @@ public:
 	
 	AShootingHUD();
 
+	void NotifyEnemyHit();
+	void NotifyEnemyKilled(bool bHeadShot);
+
 	virtual void BeginPlay() override;
 
 private:

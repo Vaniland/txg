@@ -4,6 +4,9 @@
 #include "ShootingWeapon_Instant.h"
 
 #include "Engine/DamageEvents.h"
+#include "Kismet/GameplayStatics.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
+#include "TX/TX.h"
 #include "TX/Game/Character/ShootingCharacterBase.h"
 
 
@@ -110,15 +113,22 @@ void AShootingWeapon_Instant::ProcessInstantHit_Confirmed(const FHitResult& Impa
 	// 伤害数据处理 只有服务器处才能处理伤害 判定死亡
 	if(GetNetMode() != NM_Client || GetLocalRole() == ROLE_Authority)
 	{
-		FPointDamageEvent PointDmg;
-		PointDmg.DamageTypeClass = InstantConfig.DamageType;
-		PointDmg.HitInfo = Impact;
-		PointDmg.ShotDirection = ShootDir;
-		PointDmg.Damage = InstantConfig.HitDamage;
-
 		if(Impact.GetActor())
 		{
-			Impact.GetActor()->TakeDamage(PointDmg.Damage, PointDmg, OwningCharacter->GetController(), this);
+			float ActualHitDamage = InstantConfig.HitDamage;
+			switch (Impact.PhysMaterial.Get()->SurfaceType)
+			{
+			case SURFACE_HEAD:
+				ActualHitDamage *= 5.f;
+				break;
+				
+			default:
+				break;
+			}
+			
+			// Impact.GetActor()->TakeDamage(PointDmg.Damage, PointDmg, OwningCharacter->GetController(), this);
+			UGameplayStatics::ApplyPointDamage(Impact.GetActor(), ActualHitDamage, ShootDir, Impact,
+			                                   OwningCharacter->GetController(), this, InstantConfig.DamageType);
 			// UE_LOG(LogTemp, Warning, TEXT("Damage %s"), *Impact.GetActor()->GetName());
 		}
 	}
@@ -129,7 +139,7 @@ void AShootingWeapon_Instant::ProcessInstantHit_Confirmed(const FHitResult& Impa
 		
 	}
 
-	// 生成特效
+	// 生成弹道 击中效果
 	if(GetNetMode() != NM_DedicatedServer)
 	{
 	}

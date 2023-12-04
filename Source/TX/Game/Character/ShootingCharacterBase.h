@@ -6,6 +6,8 @@
 #include "GameFramework/Character.h"
 #include "ShootingCharacterBase.generated.h"
 
+class USoundCue;
+enum EWeaponType : uint8;
 class UGameplayAbilitySet;
 class UShootingGameplayAbility;
 class UGameplayAbility;
@@ -21,7 +23,14 @@ USTRUCT(BlueprintType)
 struct FShootingInventory
 {
 	GENERATED_BODY()
-	TArray<AShootingWeaponBase*> Weapons;
+
+	// Add UPROPERTY() for rep
+
+	UPROPERTY()
+	TWeakObjectPtr<AShootingWeaponBase> PrimaryWeapon;
+
+	UPROPERTY()
+	TWeakObjectPtr<AShootingWeaponBase> SecondaryWeapon;
 };
 
 UCLASS()
@@ -41,8 +50,9 @@ public:
 	FText GetAmmoText() const;
 	float GetHealthPercent() const;
 	UTexture2D* GetWeaponIcon() const;
-	
 
+	bool IsDead() const { return bIsDying; }
+	
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -64,8 +74,8 @@ public:
 	void EquipWeapon(AShootingWeaponBase* NewWeapon);
 
 	UFUNCTION(Reliable, Server)
-	void ServerEquipWeapon(AShootingWeaponBase* NewWeapon);
-	void ServerEquipWeapon_Implementation(AShootingWeaponBase* NewWeapon);
+	void EquipWeaponOnServer(AShootingWeaponBase* NewWeapon);
+	void EquipWeaponOnServer_Implementation(AShootingWeaponBase* NewWeapon);
 
 	void SetCurrentWeapon(AShootingWeaponBase* NewWeapon, AShootingWeaponBase* LastWeapon);
 
@@ -75,6 +85,7 @@ public:
 
 	bool IsTargeting() const;
 
+	UFUNCTION(BlueprintCallable)
 	bool IsSprinting() const;
 
 	virtual float TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
@@ -87,9 +98,10 @@ public:
 
 	// Animation
 	virtual float PlayAnimMontage(UAnimMontage* AnimMontage, float InPlayRate = 1.f, FName StartSectionName = NAME_None) override;
+	virtual void StopAnimMontage(UAnimMontage* AnimMontage) override;
 
 private:
-	bool DoesWeaponExist(AShootingWeaponBase* InWeapon) const;
+	// bool DoesWeaponExist(AShootingWeaponBase* InWeapon) const;
 private:
 	// CharacterMovement
 	void MoveForward(float Value);
@@ -101,6 +113,17 @@ private:
 
 	void EndCrouch();
 
+	void PlayHit(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser);
+	
+	UFUNCTION(Reliable,NetMulticast)
+	void PlayHitMulticast(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser);
+	virtual void PlayHitMulticast_Implementation(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser);
+	
+	UFUNCTION(Reliable,NetMulticast)
+	void PlayDeadMulticast(float KillingDamage, struct FDamageEvent const& DamageEvent, class AController* Killer, class AActor* DamageCauser, bool bHeadShot = false);
+	virtual void PlayDeadMulticast_Implementation(float KillingDamage, struct FDamageEvent const& DamageEvent, class AController* Killer, class AActor* DamageCauser, bool bHeadShot = false);
+
+	
 	// Weapon
 	void StartWeaponFire();
 
@@ -113,7 +136,22 @@ private:
 	void OnStartSprint();
 	void OnStopSprint();
 
-	// Jump
+	//
+	void OnEquipPrimaryWeapon();
+	void OnEquipSecondaryWeapon();
+
+	// reload
+	void OnStartReload();
+
+	// DropWeapon
+	void OnDropWeapon();
+	UFUNCTION(Reliable, Server)
+	void DropWeaponOnServer();
+	void DropWeaponOnServer_Implementation();
+
+	UFUNCTION(Reliable, NetMulticast)
+	void DropWeaponMulticast();
+	void DropWeaponMulticast_Implementation();
 
 	void SetRunning(bool bNewRunning);
 
@@ -122,6 +160,11 @@ private:
 	void SetRunningOnServer_Implementation(bool bNewRunning);
 	bool SetRunningOnServer_Validate(bool bNewRunning);
 
+	UFUNCTION(Reliable, NetMulticast)
+	void PickupWeaponMulticast(AShootingWeaponBase* NewWeapon);
+	void PickupWeaponMulticast_Implementation(AShootingWeaponBase* NewWeapon);
+
+
 	// 如果是服务器判定捡到武器装备上来，要同步到客户端
 	UFUNCTION()
 	void OnRep_CurrentWeapon(AShootingWeaponBase* LastWeapon);
@@ -129,8 +172,13 @@ private:
 	UFUNCTION()
 	void OnRep_Inventory();
 
+	// UFUNCTION()
+	// void OnRep_HitRepCounter();
+
 private:
 	bool bASCInputBound;
+
+	bool bInteractable;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Shooter|Weapon",meta = (AllowPrivateAccess = "true"))
 	FName WeaponSocketName;
@@ -140,7 +188,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "GASShooter|Inventory")
 	bool AddWeaponToInventory(AShootingWeaponBase* NewWeapon, bool bEquipWeapon = false);
 
+	UFUNCTION(BlueprintCallable)
 	AShootingWeaponBase* GetCurrentWeapon() const { return CurrentWeapon; }
+
+	UFUNCTION(BlueprintCallable)
+	EWeaponType GetCurrentWeaponType() const;
 
 	USkeletalMeshComponent* Get3PMesh() const { return GetMesh(); }
 	USkeletalMeshComponent* Get1PMesh() const { return Mesh1P; }
@@ -179,13 +231,23 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Inventory,Category = "Shooter|Inventory")
 	FShootingInventory Inventory;
+
+	UPROPERTY(EditDefaultsOnly)
+	UAnimMontage* DeathAnim;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Sound")
+	USoundCue* PickupWeaponSound;
+
+	FTimerHandle TimerHandle_Interact;
+
+	// UPROPERTY(Transient, ReplicatedUsing = OnRep_HitRepCounter)
+	// uint8 HitRepCounter;
 	
 	bool bWantsToRun;
 	
 	bool bWantsToFire;
 
 	bool bIsTargeting;
-
 
 	void BindASCInput();
 	

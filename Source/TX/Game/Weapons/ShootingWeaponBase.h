@@ -6,6 +6,10 @@
 #include "GameFramework/Actor.h"
 #include "ShootingWeaponBase.generated.h"
 
+class UWeaponStateMachineComponent;
+class UWeaponStateMachineBase;
+class AShootingWeaponBase;
+class FWeaponStateBase;
 class USoundCue;
 class UCapsuleComponent;
 class AShootingCharacterBase;
@@ -15,12 +19,22 @@ class UGameplayAbility;
 class UShootingAbilitySystemComponent;
 
 UENUM(BlueprintType)
-enum EWeaponState
+enum EWeaponState : uint8
 {
 	IDLE,
 	FIRING,
 	RELOADING,
 	EQUIPPING,
+};
+
+UENUM(BlueprintType)
+enum EWeaponType : uint8
+{
+	NONEWEAPONTYPE,
+	PRIMARY,
+	SECONDARY,
+	MELEE,
+	CONSUMBLE,
 };
 
 USTRUCT()
@@ -52,6 +66,12 @@ struct FWeaponData
 
 	UPROPERTY(EditDefaultsOnly)
 	float NoAnimReloadDuration;
+
+	UPROPERTY(EditDefaultsOnly)
+	TEnumAsByte<EWeaponType> WeaponType;
+
+	UPROPERTY(EditDefaultsOnly)
+	bool bFullAuto;
 	
 	FWeaponData()
 		: bInfiniteAmmo(false)
@@ -61,6 +81,8 @@ struct FWeaponData
 		  , InitialClips(2)
 		  , TimeBetweenShots(0.2f)
 		  , NoAnimReloadDuration(2.0f)
+		  , WeaponType(NONEWEAPONTYPE)
+		  , bFullAuto(false)
 	{
 	}
 	
@@ -82,7 +104,6 @@ struct FWeaponAnim
 		  , Anim3P(nullptr)
 	{
 	}
-	
 };
 
 
@@ -99,18 +120,39 @@ public:
 	// 1p or 3p
 	USkeletalMeshComponent* GetWeaponMesh();
 
+	USkeletalMeshComponent* Get3PMesh();
+
+	EWeaponType GetWeaponType() const { return WeaponConfig.WeaponType; }
+
 	virtual void PostInitializeComponents() override;
 
+	/* 动词开始表示主动行为*/
 	// 
 	virtual void StartFire();
 	virtual void StopFire();
 
 	//
 	virtual void StartReload(bool bFromReplication = false);
-
 	virtual void StopReload();
 
-	virtual void ReloadWeapon();	
+	virtual void OnReloadFinished();
+
+	//
+	void Equip();
+	virtual void OnEquip(const AShootingWeaponBase* LastWeapon);
+	virtual void OnEquipFinished();
+	virtual void StopEquip();
+
+	virtual void OnUnEquip();
+
+	//
+	void OnDrop();
+
+	//
+	void OnPickUp();
+
+	// only when change to another or drop
+	void ResetState();
 
 	UFUNCTION(Reliable, Server, WithValidation)
 	void StartReloadOnServer();
@@ -121,7 +163,7 @@ public:
 
 	bool CanReload();
 
-	
+	bool IsFullAuto() const{ return WeaponConfig.bFullAuto; }
 
 	bool IsInfinitAmmo() const {return WeaponConfig.bInfiniteAmmo;}
 
@@ -139,11 +181,18 @@ public:
 
 	bool HasInfiniteClip() const;
 
-	void Equip();
+	bool IsEquipped() const { return bIsEquipped; }
+	void SetIsEquipped(bool bInIsEquipped) { this->bIsEquipped = bInIsEquipped; }
+	
+	// SM
+	bool GetWantsToFire() const { return bWantsToFire; }
 
 	UTexture2D* GetWeaponIcon() const;
 	
 	FWeaponAnim GetEquipAnim() const;
+
+	float GetLastFireTime() { return LastFireTime; }
+	void SetLastFireTime(float InLastFireTime) { LastFireTime = InLastFireTime; }
 private:
 	virtual void NotifyActorBeginOverlap(AActor* OtherActor) override;
 
@@ -168,6 +217,7 @@ protected:
 
 	UAudioComponent* PlayWeaponSound(USoundCue* Sound);
 
+	void DetachMeshFromPawn();
 
 	// 武器结束开火
 	virtual void OnBurstFinished();
@@ -194,7 +244,7 @@ protected:
 	// 开火特效?
 	void SimulateWeaponFire();
 
-	void StopStimulateWaeponFire();
+	void StopSimulateWaeponFire();
 
 	virtual FVector GetAdjustedAim() const;
 	
@@ -207,6 +257,8 @@ protected:
 
 	// Animation
 	float PlayWeaponAnimation(const FWeaponAnim& Animation);
+	void StopWeaponAnimation(const FWeaponAnim& Animation);
+	
 
 protected:
 	UPROPERTY(BlueprintReadOnly, Replicated , Category = "Shooter|Weapon")
@@ -245,6 +297,12 @@ protected:
 	
 	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Sound")
 	USoundCue* ReloadSound;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Sound")
+	USoundCue* OutOfAmmoSound;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Camera")
+	TSubclassOf<UCameraShakeBase> FireCamShake;
 
 	//
 	UPROPERTY(EditDefaultsOnly)
@@ -282,7 +340,8 @@ protected:
 	bool bWantsToFire;
 	
 	bool bIsEquipped;
-	
+
+protected:
 	bool bPendingEquip;
 	
 	UPROPERTY(Transient, ReplicatedUsing = OnRep_Reload)
@@ -290,6 +349,8 @@ protected:
 
 	//
 	bool bRefiring;
+	
+	bool bPlayingFireAnim;
 
 	// Animations
 	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Animation")
@@ -300,6 +361,9 @@ protected:
 	
 	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Animation")
 	FWeaponAnim ReloadAnim;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Shooter|Debug")
+	bool bDebugTrace;
 
 protected:
 	FTimerHandle TimerHandle_HandelFiring;

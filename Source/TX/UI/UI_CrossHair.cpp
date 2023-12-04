@@ -45,7 +45,17 @@ void UUI_CrossHair::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 			}
 		}
 	}
-}
+
+	if (LastHitTime > 0.f)
+	{
+		float CurHitTime = GetWorld()->GetTimeSeconds();
+		CrossHairHitLD->SetOpacity(FMath::Clamp(1.f - (CurHitTime - LastHitTime) / HitBlinkTime, 0.f, 1.f));
+		CrossHairHitRD->SetOpacity(FMath::Clamp(1.f - (CurHitTime - LastHitTime) / HitBlinkTime, 0.f, 1.f));
+		CrossHairHitLU->SetOpacity(FMath::Clamp(1.f - (CurHitTime - LastHitTime) / HitBlinkTime, 0.f, 1.f));
+		CrossHairHitRU->SetOpacity(FMath::Clamp(1.f - (CurHitTime - LastHitTime) / HitBlinkTime, 0.f, 1.f));
+	}	
+	
+}	
 
 void UUI_CrossHair::SetShowCrossHair(bool bShow)
 {
@@ -63,6 +73,11 @@ void UUI_CrossHair::SetShowCrossHair(bool bShow)
 		CrossHairL->SetVisibility(ESlateVisibility::Hidden);
 		CrossHairR->SetVisibility(ESlateVisibility::Hidden);
 	}
+}
+
+void UUI_CrossHair::EnemyHitBlink()
+{
+	LastHitTime = GetWorld()->GetTimeSeconds();
 }
 
 void UUI_CrossHair::NativeConstruct()

@@ -3,6 +3,7 @@
 
 #include "UI_ShootingMain.h"
 
+#include "UI_CrossHair.h"
 #include "Components/Image.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
@@ -19,6 +20,7 @@ void UUI_ShootingMain::NativeConstruct()
 		ShootingPlayerController->OnWeaponEquippedDelegate.BindUObject(this, &UUI_ShootingMain::SetWeaponIcon);
 		ShootingPlayerController->OnHealthChangedDelegate.BindUObject(this, &UUI_ShootingMain::SetHP);
 		ShootingPlayerController->OnWeaponAmmoChangedDelegate.BindUObject(this, &UUI_ShootingMain::SetAmmoText);
+		ShootingPlayerController->OnWeaponPickDropDelegate.BindUObject(this, &UUI_ShootingMain::UpdateWeaponInventoryIcon);
 	}
 	
 }
@@ -71,7 +73,26 @@ void UUI_ShootingMain::SetAmmoText(const FText& AmmoText)
 	AmmoTextBlock->SetText(AmmoText);
 }
 
+void UUI_ShootingMain::UpdateWeaponInventoryIcon(EWeaponType WeaponType, bool bPickDrop)
+{
+}
+
+
 void UUI_ShootingMain::SetKillsText(int32 KillsCount)
 {
 	KillsTextBlock->SetText(FText::FromString(FString::Printf(TEXT("Kills: %d"), KillsCount)));
+}
+
+void UUI_ShootingMain::NotifyEnemyHit()
+{
+	if(CrossHair)
+	{
+		CrossHair->EnemyHitBlink();
+	}
+}
+
+void UUI_ShootingMain::NotifyEnemyKilled(bool bHeadShot)
+{
+	CrossHair->EnemyHitBlink();
+	K2_NotifyEnemyKilled(bHeadShot);
 }

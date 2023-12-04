@@ -15,6 +15,8 @@ class TX_API AShootingGameState : public AGameStateBase
 	GENERATED_BODY()
 
 public:
+	AShootingGameState(const FObjectInitializer& ObjectInitializer);
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	
 	void AddTeamScore(int32 TeamNumber, float Score);
@@ -24,8 +26,8 @@ public:
 
 	UPROPERTY(Transient, Replicated)
 	TArray<int32> TeamScores;
-	
-	UPROPERTY(Transient, Replicated)
+
+	UPROPERTY(Transient, BlueprintReadOnly, Replicated)
 	int32 RemainingTime;
 
 	UPROPERTY(Transient, Replicated)

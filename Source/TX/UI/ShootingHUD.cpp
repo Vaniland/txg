@@ -10,6 +10,22 @@ AShootingHUD::AShootingHUD()
 {
 }
 
+void AShootingHUD::NotifyEnemyHit()
+{
+	if(MainUI)
+	{
+		MainUI->NotifyEnemyHit();
+	}
+}
+
+void AShootingHUD::NotifyEnemyKilled(bool bHeadShot)
+{
+	if(MainUI)
+	{
+		MainUI->NotifyEnemyKilled(bHeadShot);
+	}
+}
+
 void AShootingHUD::BeginPlay()
 {
 	Super::BeginPlay();

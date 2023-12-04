@@ -23,10 +23,17 @@ public:
 
 	void SetShowCrossHair(bool bShow);
 
+	void EnemyHitBlink();
+
 	UPROPERTY(EditDefaultsOnly)
 	float SpreadMulti = 10.f;
 
+	UPROPERTY(EditDefaultsOnly)
+	float HitBlinkTime = 0.1f;
+
+
 private:
+	float LastHitTime;
 
 	// CrossHair
 	UPROPERTY(meta = (BindWidget))
@@ -39,6 +46,15 @@ private:
 	UImage* CrossHairL;
 	UPROPERTY(meta = (BindWidget))
 	UImage* CrossHairR;
+	
+	UPROPERTY(meta = (BindWidget))
+	UImage* CrossHairHitLU;
+	UPROPERTY(meta = (BindWidget))
+	UImage* CrossHairHitRU;
+	UPROPERTY(meta = (BindWidget))
+	UImage* CrossHairHitRD;
+	UPROPERTY(meta = (BindWidget))
+	UImage* CrossHairHitLD;
 };
 
 

@@ -6,6 +6,14 @@
 #include "Net/UnrealNetwork.h"
 
 
+AShootingGameState::AShootingGameState(const FObjectInitializer& ObjectInitializer)
+	:Super(ObjectInitializer)
+, NumTeams(2)
+, RemainingTime(0)
+, bTimerPaused(false)
+{
+}
+
 void AShootingGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);

@@ -13,6 +13,7 @@
 #include "TX/Game/Abilities/ShootingGameplayAbility.h"
 #include "TX/Game/Character/ShootingCharacterBase.h"
 #include "TX/Game/Controller/ShootingPlayerController.h"
+#include "TX/UI/ShootingHUD.h"
 
 
 void AShootingWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -23,6 +24,7 @@ void AShootingWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 	// 在其他地方同步特效
 	DOREPLIFETIME_CONDITION(AShootingWeaponBase, BurstCount, COND_SkipOwner);
+	DOREPLIFETIME_CONDITION(AShootingWeaponBase, bPendingReload, COND_SkipOwner);
 
 	// 只有owner需要判断弹药
 	DOREPLIFETIME_CONDITION(AShootingWeaponBase, CurrentAmmo, COND_OwnerOnly);
@@ -38,28 +40,35 @@ AShootingWeaponBase::AShootingWeaponBase()
 	PrimaryActorTick.bCanEverTick = true;
 	SetReplicates(true);
 
-	CapsuleComponent = CreateDefaultSubobject<UCapsuleComponent>(TEXT("CapsuleComponent"));
-	SetRootComponent(CapsuleComponent);
-
+	WeaponMesh3P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("WeaponMesh3P"));
+	SetRootComponent(WeaponMesh3P);
+	WeaponMesh3P->SetCastShadow(true);
+	WeaponMesh3P->SetCollisionObjectType(ECC_WorldStatic);
+	WeaponMesh3P->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
+	WeaponMesh3P->SetSimulatePhysics(true);
+	
 	WeaponMesh1P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("WeaponMesh1P"));
-	WeaponMesh1P->SetVisibility(false, true);
 	WeaponMesh1P->SetupAttachment(RootComponent);
+	WeaponMesh1P->SetVisibility(false, false);
 	WeaponMesh1P->SetCastShadow(false);
-	WeaponMesh1P->SetCollisionObjectType(ECC_WorldDynamic);
+	WeaponMesh1P->SetCollisionObjectType(ECC_WorldStatic);
 	WeaponMesh1P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	WeaponMesh1P->SetCollisionResponseToAllChannels(ECR_Ignore);
 
-	WeaponMesh3P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("WeaponMesh3P"));
-	WeaponMesh3P->SetupAttachment(RootComponent);
-	WeaponMesh3P->SetCastShadow(true);
-	WeaponMesh3P->SetCollisionObjectType(ECC_WorldDynamic);
-	WeaponMesh3P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	WeaponMesh3P->SetCollisionResponseToAllChannels(ECR_Ignore);
+	CapsuleComponent = CreateDefaultSubobject<UCapsuleComponent>(TEXT("CapsuleComponent"));
+	CapsuleComponent->SetupAttachment(RootComponent);
+	CapsuleComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	// WeaponMesh3P->SetCollisionResponseToAllChannels(ECR_Ignore);
 }
 
 USkeletalMeshComponent* AShootingWeaponBase::GetWeaponMesh()
 {
 	return OwningCharacter.IsValid() && OwningCharacter->IsFirstPerson() ? WeaponMesh1P : WeaponMesh3P;
+}
+
+USkeletalMeshComponent* AShootingWeaponBase::Get3PMesh()
+{
+	return WeaponMesh3P;
 }
 
 
@@ -87,7 +96,11 @@ void AShootingWeaponBase::StartFire()
 	if (!bWantsToFire)
 	{
 		bWantsToFire = true;
-		DetermineWeaponState();
+		if(CanFire())
+		{
+			DetermineWeaponState();
+			OnBurstStarted();
+		}
 	}
 }
 
@@ -102,6 +115,7 @@ void AShootingWeaponBase::StopFire()
 	{
 		bWantsToFire = false;
 		DetermineWeaponState();
+		OnBurstFinished();
 	}
 }
 
@@ -120,17 +134,22 @@ void AShootingWeaponBase::StartReload(bool bFromReplication /*= false*/)
 		// 想改变状态
 		bPendingReload = true;
 		DetermineWeaponState();
-
-		// TODO 换弹动画
+		
+		//
+		float AnimDuration = PlayWeaponAnimation(ReloadAnim);
 		// 如果没有动画，间隔时间用NoAnimReloadDuration
-		float AnimDuration = WeaponConfig.NoAnimReloadDuration;
+		if(AnimDuration <= 0.0f)
+		{
+			AnimDuration = WeaponConfig.NoAnimReloadDuration;
+		}
 		GetWorldTimerManager().SetTimer(TimerHandle_StopReload, this, &AShootingWeaponBase::StopReload,
 		                                AnimDuration, false);
 		if(GetLocalRole() == ROLE_Authority)
 		{
 			// 弹药的数值变化必须由服务器执行 在填弹动画前一点执行
-			GetWorldTimerManager().SetTimer(TimerHandle_ReloadWeapon,this,&AShootingWeaponBase::ReloadWeapon,AnimDuration - 0.1f,false);
+			GetWorldTimerManager().SetTimer(TimerHandle_ReloadWeapon,this,&AShootingWeaponBase::OnReloadFinished,AnimDuration - 0.1f,false);
 		}
+		
 
 		// 播放本地音效
 		if(OwningCharacter.IsValid() && OwningCharacter->IsLocallyControlled())
@@ -151,7 +170,7 @@ void AShootingWeaponBase::StopReload()
 	}
 }
 
-void AShootingWeaponBase::ReloadWeapon()
+void AShootingWeaponBase::OnReloadFinished()
 {
 	int32 AmmoToLoad = FMath::Min(WeaponConfig.AmmoPerClip - CurrentAmmoInClip, CurrentAmmo - CurrentAmmoInClip);
 
@@ -169,6 +188,95 @@ void AShootingWeaponBase::ReloadWeapon()
 	// {
 		// CurrentAmmo
 	// }
+}
+
+void AShootingWeaponBase::OnEquip(const AShootingWeaponBase* LastWeapon)
+{
+	if(OwningCharacter.IsValid())
+	{
+		UAnimMontage* AnimToUse = OwningCharacter->IsFirstPerson() ? GetEquipAnim().Anim1P : GetEquipAnim().Anim3P;
+		OwningCharacter->PlayAnimMontage(AnimToUse);
+	}
+	
+	
+}
+
+void AShootingWeaponBase::OnEquipFinished()
+{
+	bPendingEquip = false;
+	bIsEquipped = true;
+	
+	DetermineWeaponState();
+}
+
+void AShootingWeaponBase::StopEquip()
+{
+}
+
+void AShootingWeaponBase::OnUnEquip()
+{
+	// 隐藏 停止跟随?
+	DetachMeshFromPawn();
+
+	ResetState();
+
+}
+
+void AShootingWeaponBase::OnDrop()
+{
+	
+	if(WeaponMesh1P)
+	{
+		WeaponMesh1P->SetHiddenInGame(true);
+	}
+
+	if(WeaponMesh3P)
+	{
+		WeaponMesh3P->SetHiddenInGame(false);
+		WeaponMesh3P->SetVisibility(true, false);
+	}
+
+	WeaponMesh3P->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
+	CapsuleComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	WeaponMesh3P->SetSimulatePhysics(true);
+
+	ResetState();
+
+	OwningCharacter = nullptr;
+
+}
+
+void AShootingWeaponBase::OnPickUp()
+{
+	WeaponMesh3P->SetSimulatePhysics(false);
+	WeaponMesh3P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	CapsuleComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	
+	DetachMeshFromPawn();
+}
+
+void AShootingWeaponBase::ResetState()
+{
+	// 清除状态
+	bIsEquipped = false;
+	StopFire();
+	
+	if(bPendingReload)
+	{
+		bPendingReload = false;
+
+		GetWorldTimerManager().ClearTimer(TimerHandle_ReloadWeapon);
+		GetWorldTimerManager().ClearTimer(TimerHandle_StopReload);
+	}
+
+	if(bPendingEquip)
+	{
+		bPendingEquip = false;
+
+		GetWorldTimerManager().ClearTimer(TimerHandle_OnEquipFinished);
+	}
+
+	DetermineWeaponState();
 }
 
 bool AShootingWeaponBase::StartReloadOnServer_Validate()
@@ -269,7 +377,6 @@ void AShootingWeaponBase::Equip()
 	if (OwningCharacter.IsValid())
 	{
 		CapsuleComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		bIsEquipped = true;
 		
 		if(WeaponMesh3P)
 		{
@@ -279,13 +386,14 @@ void AShootingWeaponBase::Equip()
 			WeaponMesh3P->SetRelativeRotation(Weapon1PRelativeRotation);
 			WeaponMesh3P->SetRelativeLocation(Weapon1PRelativeLocation);
 
+			WeaponMesh3P->SetHiddenInGame(false);
 			if(OwningCharacter->IsFirstPerson())
 			{
-				WeaponMesh3P->SetVisibility(false, true);
+				WeaponMesh3P->SetVisibility(false, false);
 			}
 			else
 			{
-				WeaponMesh3P->SetVisibility(true, true);	
+				WeaponMesh3P->SetVisibility(true, false);
 			}
 		}
 
@@ -296,16 +404,25 @@ void AShootingWeaponBase::Equip()
 			                                OwningCharacter->GetWeaponSocketName());
 			WeaponMesh1P->SetRelativeRotation(Weapon1PRelativeRotation);
 			WeaponMesh1P->SetRelativeLocation(Weapon1PRelativeLocation);
-			
+
+			WeaponMesh1P->SetHiddenInGame(false);
 			if(OwningCharacter->IsFirstPerson())
 			{
-				WeaponMesh1P->SetVisibility(true, true);
+				WeaponMesh1P->SetVisibility(true, false);
 			}
 			else
 			{
-				WeaponMesh1P->SetVisibility(false, true);	
+				WeaponMesh1P->SetVisibility(false, false);
 			}
 		}
+
+		bPendingEquip = true;
+		DetermineWeaponState();
+		
+		UAnimMontage* AnimToUse = OwningCharacter->IsFirstPerson() ? GetEquipAnim().Anim1P : GetEquipAnim().Anim3P;
+		float Duration =  OwningCharacter->PlayAnimMontage(AnimToUse);
+		if (Duration < 0.0f) { Duration = 0.5f; } // 安全措施?
+		GetWorldTimerManager().SetTimer(TimerHandle_OnEquipFinished,this, &AShootingWeaponBase::OnEquipFinished, Duration, false);
 	}
 }
 
@@ -321,7 +438,7 @@ void AShootingWeaponBase::NotifyActorBeginOverlap(AActor* OtherActor)
 	if (OwningCharacter.IsValid()) { return; }
 
 	AShootingCharacterBase* InCharacter = Cast<AShootingCharacterBase>(OtherActor);
-	if (IsValid(OtherActor) && InCharacter)
+	if (IsValid(OtherActor) && InCharacter && !InCharacter->IsDead())
 	{
 		InCharacter->AddWeaponToInventory(this, false);
 	}
@@ -378,6 +495,7 @@ void AShootingWeaponBase::DetermineWeaponState()
 	// 正在切换武器
 	else if (bPendingEquip)
 	{
+		NewState = EWeaponState::EQUIPPING;
 	}
 
 	SetWeaponState(NewState);
@@ -386,20 +504,17 @@ void AShootingWeaponBase::DetermineWeaponState()
 void AShootingWeaponBase::SetWeaponState(EWeaponState NewState)
 {
 	const EWeaponState PrevState = CurrentState;
-
-	// 如果之前是开火状态，现在不是了，那么就是开火结束
-	if (PrevState == EWeaponState::FIRING && NewState != EWeaponState::FIRING)
-	{
-		OnBurstFinished();
-	}
-
 	CurrentState = NewState;
 
-	// 之前没开火，开始开火
-	if (PrevState != EWeaponState::FIRING && NewState == EWeaponState::FIRING)
-	{
-		OnBurstStarted();
-	}
+	// // 进入Firing State
+	// if (PrevState == EWeaponState::FIRING && NewState != EWeaponState::FIRING)
+	// {
+	// 	OnBurstFinished();
+	// }
+	// if (PrevState != EWeaponState::FIRING && NewState == EWeaponState::FIRING)
+	// {
+	// 	OnBurstStarted();
+	// }
 }
 
 UAudioComponent* AShootingWeaponBase::PlayWeaponSound(USoundCue* Sound)
@@ -413,13 +528,29 @@ UAudioComponent* AShootingWeaponBase::PlayWeaponSound(USoundCue* Sound)
 	return AC;
 }
 
+void AShootingWeaponBase::DetachMeshFromPawn()
+{
+	WeaponMesh1P->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
+	WeaponMesh1P->SetHiddenInGame(true);
+	// WeaponMesh3P->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
+	WeaponMesh3P->SetHiddenInGame(true);
+}
+
 void AShootingWeaponBase::OnBurstFinished()
 {
 	// 结束设计状态清除还在等待的发射
 	GetWorldTimerManager().ClearTimer(TimerHandle_HandelFiring);
 
 	// 停止特效
-	StopStimulateWaeponFire();
+	if (bPlayingFireAnim)
+	{
+		if(WeaponConfig.bFullAuto)
+		{
+			StopSimulateWaeponFire();
+		}
+		bPlayingFireAnim = false;
+	}
+	
 	BurstCount = 0;
 
 	
@@ -503,7 +634,12 @@ void AShootingWeaponBase::HandleFiring()
 		// 连发状态不提示 松开鼠标再按提示
 		if(GetCurrentAmmo() == 0 && !bRefiring)
 		{
-				
+			UGameplayStatics::PlaySound2D(this, OutOfAmmoSound);
+			AShootingPlayerController* PC = Cast<AShootingPlayerController>(OwningCharacter->GetController());
+			AShootingHUD* PlayerHUD = PC ? Cast<AShootingHUD>(PC->GetHUD()) : nullptr;
+			if(PlayerHUD)
+			{
+			}
 		}
 
 		if(BurstCount > 0)
@@ -516,6 +652,13 @@ void AShootingWeaponBase::HandleFiring()
 		OnBurstFinished();	
 	}
 
+	if(!WeaponConfig.bFullAuto)
+	{
+		bWantsToFire = false;
+		DetermineWeaponState();
+		OnBurstFinished();
+	}
+
 	if (OwningCharacter.IsValid() && OwningCharacter->IsLocallyControlled())
 	{
 		// 服务器执行消耗弹药
@@ -526,7 +669,7 @@ void AShootingWeaponBase::HandleFiring()
 		}
 
 		// 连发，只要鼠标不松开就不会设置State回来,接下来满足间隔就能开火
-		bRefiring = CurrentState == EWeaponState::FIRING && WeaponConfig.TimeBetweenShots > 0.0f;
+		bRefiring = WeaponConfig.bFullAuto && (CurrentState == EWeaponState::FIRING && WeaponConfig.TimeBetweenShots > 0.0f);
 		if (bRefiring)
 		{
 			// TODO 时间间隔考虑帧率修正?
@@ -595,39 +738,68 @@ void AShootingWeaponBase::SimulateWeaponFire()
 		// 第一人称控制器要生成两组特效
 		// 非第一人称控制器使用get到的mesh?
 		USkeletalMeshComponent* UseWaeponMesh = GetWeaponMesh();
-		if (MuzzlePSC == nullptr)
+		if (OwningCharacter.IsValid() && OwningCharacter->IsLocallyControlled())
 		{
-			if (OwningCharacter.IsValid() && OwningCharacter->IsLocallyControlled())
+			AController* Controller = OwningCharacter->GetController();
+			if (Controller)
 			{
-				AController* Controller = OwningCharacter->GetController();
-				if (Controller)
-				{
-					MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, WeaponMesh1P, MuzzleAttachPoint);
-					MuzzlePSC->SetOwnerNoSee(false);
-					MuzzlePSC->SetOnlyOwnerSee(true);
+				MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, WeaponMesh1P, MuzzleAttachPoint,
+				                                                   FVector::Zero(), FRotator::ZeroRotator,
+				                                                   FVector(1.0f), EAttachLocation::SnapToTarget,
+				                                                   true, EPSCPoolMethod::None, true);
+				MuzzlePSC->SetOwnerNoSee(false);
+				MuzzlePSC->SetOnlyOwnerSee(true);
 
-					MuzzlePSC_3P = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, WeaponMesh3P, MuzzleAttachPoint);
-					MuzzlePSC_3P->SetOwnerNoSee(true);
-					MuzzlePSC_3P->SetOnlyOwnerSee(false);
-				}
+				MuzzlePSC_3P = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, WeaponMesh3P, MuzzleAttachPoint,
+				                                                      FVector::Zero(), FRotator::ZeroRotator,
+				                                                      FVector(1.0f), EAttachLocation::SnapToTarget,
+				                                                      true, EPSCPoolMethod::None, true);
+				MuzzlePSC_3P->SetOwnerNoSee(true);
+				MuzzlePSC_3P->SetOnlyOwnerSee(false);
 			}
-			else
-			{
-				MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, UseWaeponMesh, MuzzleAttachPoint);
-			}
+		}
+		else
+		{
+			MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, WeaponMesh1P, MuzzleAttachPoint,
+			                                                   FVector::Zero(), FRotator::ZeroRotator,
+			                                                   FVector(1.0f), EAttachLocation::SnapToTarget,
+			                                                   true, EPSCPoolMethod::None, true);
 		}
 	}
 
 	// 2.动画
+	if(!bPlayingFireAnim)
+	{
+		PlayWeaponAnimation(FireAnim);
+		bPlayingFireAnim = true;
+	}
 
 	// 3.声音
 	PlayWeaponSound(FireSound);
 
-	// 4.相机抖动
+	// 4.相机抖动 仅在
+	AShootingPlayerController* PC = OwningCharacter.IsValid()
+		                                ? Cast<AShootingPlayerController>(OwningCharacter->GetController())
+		                                : nullptr;
+	if(PC && PC->IsLocalController())
+	{
+		PC->ClientStartCameraShake(FireCamShake);
+		// 手柄可以加震动
+	}
+	
 }
 
-void AShootingWeaponBase::StopStimulateWaeponFire()
+void AShootingWeaponBase::StopSimulateWaeponFire()
 {
+	if(OwningCharacter.IsValid())
+	{
+		UAnimMontage* UseAnim = OwningCharacter->IsFirstPerson() ? FireAnim.Anim1P : FireAnim.Anim3P;
+		if(UseAnim)
+		{
+			// 特别的PlayAnimMontage
+			OwningCharacter->StopAnimMontage(UseAnim);
+		}
+	}
 }
 
 FVector AShootingWeaponBase::GetAdjustedAim() const
@@ -681,7 +853,10 @@ FHitResult AShootingWeaponBase::WeaponTrace(const FVector& StartTrace, const FVe
 	FHitResult Hit(ForceInit);
 	GetWorld()->LineTraceSingleByChannel(Hit, StartTrace, EndTrace, COLLISION_WEAPON, TraceParams);
 
-	DrawDebugLine(GetWorld(), StartTrace, EndTrace, FColor::Green, false, 2.0f, 0, 1.0f);
+	if (bDebugTrace)
+	{
+		DrawDebugLine(GetWorld(), StartTrace, EndTrace, FColor::Green, false, 2.0f, 0, 1.0f);
+	}
 
 	return Hit;
 }
@@ -708,11 +883,24 @@ float AShootingWeaponBase::PlayWeaponAnimation(const FWeaponAnim& Animation)
 		UAnimMontage* UseAnim = OwningCharacter->IsFirstPerson() ? Animation.Anim1P : Animation.Anim3P;
 		if(UseAnim)
 		{
+			// 特别的PlayAnimMontage
 			Duration = OwningCharacter->PlayAnimMontage(UseAnim);
 		}	
 	}
 
 	return Duration;
+}
+
+void AShootingWeaponBase::StopWeaponAnimation(const FWeaponAnim& Animation)
+{
+	if(OwningCharacter.IsValid())
+	{
+		UAnimMontage* UseAnim = OwningCharacter->IsFirstPerson() ? Animation.Anim1P : Animation.Anim3P;
+		if(UseAnim)
+		{
+			OwningCharacter->StopAnimMontage(UseAnim);
+		}
+	}
 }
 
 FWeaponAnim AShootingWeaponBase::GetEquipAnim() const
@@ -725,6 +913,11 @@ FWeaponAnim AShootingWeaponBase::GetEquipAnim() const
 void AShootingWeaponBase::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	// if(WeaponStateMachine)
+	// {
+		// WeaponStateMachine->DoState();
+	// }
+	
 	// if(GetLocalRole() == ROLE_SimulatedProxy)
 	// {
 	// 	UE_LOG(LogTemp, Warning, TEXT("BurstCount %d"), BurstCount);

@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "UI_ShootingMain.generated.h"
 
+enum EWeaponType : uint8;
 class UTextBlock;
 class UImage;
 class UProgressBar;
@@ -28,7 +29,16 @@ public:
 	void SetAmmoText(int32 CurrentAmmoInClip, int32 RemainAmmo);
 	void SetAmmoText(const FText& AmmoText);
 
+	void UpdateWeaponInventoryIcon(EWeaponType WeaponType, bool bPickDrop);
+
 	void SetKillsText(int32 KillsCount);
+
+	void NotifyEnemyHit();
+
+	void NotifyEnemyKilled(bool bHeadShot);
+	UFUNCTION(BlueprintImplementableEvent)
+	void K2_NotifyEnemyKilled(bool bHeadShot);
+
 
 private:
 	UPROPERTY(meta = (BindWidget))
@@ -46,5 +56,8 @@ private:
 
 	UPROPERTY(meta = (BindWidget))
 	UTextBlock* KillsTextBlock;
+
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidget, AllowPrivateAccess))
+	UImage* KillImage;
 	
 };
